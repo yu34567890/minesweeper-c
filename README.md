@@ -8,6 +8,6 @@ A terminal-based Minesweeper game made in C.
 - **F** : Flag or deflag a cell  
 - **Enter** : Reveal/mine a cell
 
-#installation
+# installation
 
 - package is avaible at aur do yay -S minesweeper
