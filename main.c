@@ -234,12 +234,22 @@ void dig(struct field **minefield,int x, int y)
         }
 }
 
+void print_help() {
+    printf("Minesweeper-c\n\n");
+    printf("Usage:\n");
+    printf("  minesweeper <height> <width> <mines>\n\n");
+    printf("Controls (in-game):\n");
+    printf("  W / A / S / D  - Move cursor\n");
+    printf("  F              - Flag / Deflag\n");
+    printf("  Enter          - Reveal cell\n");
+}
+
 int main(int argc, char *argv[])
 {
 
     if(argc != 4)
     {
-    	printf("invalid usage do minesweeper height width bombcount");
+    	print_help();
     	return 1;
     }
 
