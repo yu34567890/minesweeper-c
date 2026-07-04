@@ -8,6 +8,12 @@
 #include <ctype.h>  
 #include <string.h> 
 #include <stdint.h>
+#include <stdint.h>
+#include <time.h>
+#include <fcntl.h>
+#include <signal.h>
+
+
 
 #define RED       "\033[38;2;255;0;0m"
 #define GRN       "\033[38;2;0;255;0m"
@@ -27,7 +33,14 @@
 
 unsigned short int Y_MAX;
 unsigned short int X_MAX;
+struct termios old;
 
+static inline uint64_t us(void) // for calculating time elapsed
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1000000ULL + ts.tv_nsec / 1000;
+}
 
 
 struct field 
@@ -140,14 +153,30 @@ void render(struct field **minefield)
     }
 }
 
+void reset_field(struct field **minefield)
+{
+    for(int i=0; i<Y_MAX; i++)
+    {
+        for(int b=0; b<X_MAX; b++)
+        {
+			minefield[i][b].isbomb = 0;
+			minefield[i][b].isshown = 0;
+			minefield[i][b].isflaged = 0;
+			minefield[i][b].ishighlighted = 0;
+			minefield[i][b].bomb_count = 0;																					
+        }
+     }
+}
+
+
 void randomize(struct field **minefield, int bomb_count)
 {
     for(int i=0; i<bomb_count; i++)
     {
         trybombagain:
-        int r = rand() % ((X_MAX * Y_MAX)-1);
+        int r = rand() % ((X_MAX * Y_MAX));
         int y = r/X_MAX;
-        int x = r%X_MAX;
+        int x = r%X_MAX; // has some bias but irrelevant
         if(minefield[y][x].isbomb)
         {
             goto trybombagain;
@@ -180,7 +209,13 @@ bool checkwin(struct field **minefield)
     }
     return true;
 }
+void cleanup(void)
+{
 
+    tcsetattr(STDIN_FILENO, TCSANOW, &old);
+
+
+}
 void dig(struct field **minefield,int x, int y)
 {
         if(minefield[y][x].isflaged)
@@ -234,10 +269,24 @@ void dig(struct field **minefield,int x, int y)
         }
 }
 
+
+
+
+
+void sigint_handler(int sig)
+{
+    cleanup();
+    _Exit(128 + sig);
+}
+
+
 void print_help() {
     printf("Minesweeper-c\n\n");
     printf("Usage:\n");
-    printf("  minesweeper <height> <width> <mines>\n\n");
+    printf("  minesweeper <height> <width> <mines> <rest of arg>\n\n");
+	printf("ARGS\n");
+    printf("  --time         - enables time\n\n");
+
     printf("Controls (in-game):\n");
     printf("  W / A / S / D  - Move cursor\n");
     printf("  F              - Flag / Deflag\n");
@@ -246,13 +295,17 @@ void print_help() {
 
 int main(int argc, char *argv[])
 {
+	bool enable_time = 0;
 
-    if(argc != 4)
+    if(argc < 4)
     {
     	print_help();
     	return 1;
     }
-
+	if (argc >= 5 && strcmp(argv[4], "--time") == 0) {
+    	enable_time = true;
+	}
+	signal(SIGINT, sigint_handler);
     char *endptr;
     uint32_t minecount;
 
@@ -309,14 +362,28 @@ int main(int argc, char *argv[])
     int x = 0;
     int y = 0;
     minefield[y][x].ishighlighted = true;
+
+    bool isfirst_dig = 1;
+    uint64_t start = us();
+	uint32_t flag_remaining = minecount;
+	
+	struct termios raw;
+	tcgetattr(STDIN_FILENO, &old);
+	atexit(cleanup);
+	struct timespec ts = {
+    	.tv_sec = 0,
+    	.tv_nsec = 100000  
+	};
+
+	raw = old;
+	raw.c_lflag &= ~(ICANON | ECHO);
+	tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+	fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
     render(minefield);
+    printf( "\r " BG_RED "⚑" RESET "%d" ,flag_remaining);
     while (1)
     {
-        struct termios old, raw;
-        tcgetattr(STDIN_FILENO, &old);
-        raw = old;
-        raw.c_lflag &= ~(ICANON | ECHO);
-        tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+
         int c = getchar();   // key pressed
         
         
@@ -355,26 +422,56 @@ int main(int argc, char *argv[])
                     minefield[y][x].ishighlighted = true;
                 }
                 break;
-            case 10:
-                dig(minefield,x,y);
+            case 10: // enter
+            	if(minefield[y][x].isbomb && isfirst_dig)
+            	{
+            		while(1)
+            		{
+            			reset_field(minefield);
+            			randomize(minefield,minecount);
+            			if(!minefield[y][x].isbomb)
+            			{
+            				isfirst_dig = 0;
+            				dig(minefield,x,y);
+            				break;
+            			}
+            		}
+            	}
+            	else
+             	{
+             		isfirst_dig = 0;
+             		dig(minefield,x,y);
+             	}
                 break;
             case 'f':
                 if(!minefield[y][x].isshown)
                 {
+                	if(minefield[y][x].isflaged) flag_remaining++;
+                	else flag_remaining--; 
                     minefield[y][x].isflaged = !minefield[y][x].isflaged;
                 }
                 break;
             
         }
-        
-        render(minefield);
+        if(c!=EOF)
+        	render(minefield);
+        if(enable_time)
+        {
+			printf( "\r " BG_RED "⚑" RESET " %d" "    TIME: %llu.%llu" ,flag_remaining,(unsigned long long)((us() - start) / 1000000),(unsigned long long)((us() - start) / 10000)%100);
+		}
+		else
+		{
+			if(c!=EOF)
+				printf( "\r " BG_RED "⚑" RESET "%d" ,flag_remaining);
+		}
+		fflush(stdout);
         if(checkwin(minefield))
         {
             printf("\nYOU WON !\n");
             break;
         }
-
-        tcsetattr(STDIN_FILENO, TCSANOW, &old);
+		nanosleep(&ts, NULL);
+        
     }
     return 0;
 }
